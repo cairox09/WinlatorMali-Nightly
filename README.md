@@ -42,3 +42,219 @@ Winlator-Mali-Ludashi-Release.apk
 Winlator-Mali-Standard-Debug.apk
 Winlator-Mali-Antutu-Debug.apk
 Winlator-Mali-Ludashi-Debug.apk
+A matching .sha256 checksum file is published beside every APK.
+Example:
+Winlator-Mali-Antutu-Release.apk
+Winlator-Mali-Antutu-Release.apk.sha256
+Currently mirrored channels
+The mirror automatically tracks the newest available artifact for each upstream build channel.
+Channels observed so far include:
+- AnTuTu Release
+- Standard Debug
+Other variants automatically appear when the upstream developer publishes them.
+Possible future channels include:
+- Standard Release
+- AnTuTu Debug
+- Ludashi Release
+- Ludashi Debug
+- Multi-flavor builds
+There is no need to manually update this repository when a new supported flavor appears, as long as the upstream artifact follows the expected Winlator Mali build naming format.
+Variants
+Winlator Mali currently defines multiple Android product flavors.
+Variant	Android package	Description
+Standard	com.winlator.mali	Normal Winlator Mali package
+AnTuTu	com.antutu.ABenchMark	Alternate package identity using the AnTuTu package name
+Ludashi	com.ludashi.benchmark	Alternate package identity using the Ludashi package name
+
+
+Because the Android package names are different, Android treats these variants as separate applications.
+That means, for example, an AnTuTu build is not necessarily interchangeable with a Standard build as an in-place update.
+Use the variant corresponding to the one you already have installed.
+How the mirror works
+The synchronization workflow is located at:
+[` .github/workflows/sync.yml `](.github/workflows/sync.yml)
+It periodically checks:
+GunaCharanTeja/WinlatorMali
+for Winlator Mali GitHub Actions artifacts.
+For each available build channel, the workflow:
+1. Finds the newest non-expired upstream artifact.
+2. Checks that it belongs to the configured upstream branch.
+3. Checks that it came from the expected upstream workflow.
+4. Confirms that the upstream workflow run completed successfully.
+5. Downloads the original artifact ZIP.
+6. Verifies the ZIP against the SHA-256 digest reported by GitHub Actions when available.
+7. Searches the artifact for APK files.
+8. Extracts every APK found inside.
+9. Keeps each APK unchanged.
+10. Generates a SHA-256 checksum for each extracted APK.
+11. Publishes or replaces the corresponding assets in the rolling nightly Release.
+12. Records upstream artifact, run, commit, and timestamp information in the Release notes.
+The workflow supports both:
+one artifact
+└── one APK
+and:
+one artifact
+├── Standard APK
+├── AnTuTu APK
+└── Ludashi APK
+So if upstream publishes a multi-flavor artifact, all compatible APKs can be mirrored into the same Release.
+Automatic synchronization
+The repository checks upstream automatically every hour at:
+:37
+For example:
+10:37
+11:37
+12:37
+13:37
+...
+The workflow can also be started manually from the repository's Actions tab.
+Changes to the synchronization workflow itself also trigger a new run on the main branch.
+Rolling Release design
+This repository uses a single rolling Release:
+nightly
+Instead of creating hundreds of Releases over time, the existing APK assets are replaced when newer upstream builds become available.
+For example:
+Winlator-Mali-Antutu-Release.apk
+keeps the same permanent URL while its contents are updated whenever a newer upstream AnTuTu Release build is detected.
+This provides stable links for tools such as Obtainium.
+Obtainium
+This mirror is designed to work well with Obtainium.
+Original GitHub Actions artifacts are temporary and normally do not provide convenient permanent APK URLs.
+This repository converts them into stable GitHub Release assets.
+AnTuTu Release
+https://github.com/cairox09/WinlatorMali-Nightly/releases/download/nightly/Winlator-Mali-Antutu-Release.apk
+Standard Release
+https://github.com/cairox09/WinlatorMali-Nightly/releases/download/nightly/Winlator-Mali-Standard-Release.apk
+Ludashi Release
+https://github.com/cairox09/WinlatorMali-Nightly/releases/download/nightly/Winlator-Mali-Ludashi-Release.apk
+Standard Debug
+https://github.com/cairox09/WinlatorMali-Nightly/releases/download/nightly/Winlator-Mali-Standard-Debug.apk
+In Obtainium, add the desired URL using:
+Direct APK Link
+Because the URL remains the same while the APK contents change, Obtainium can detect when a newer mirrored build becomes available.
+[!NOTE]
+A URL only works when that specific asset currently exists in the nightly Release.
+For example, if upstream has not yet produced a Ludashi Release build, the Ludashi Release URL will not exist yet.
+
+Integrity and verification
+This repository acts only as a distribution bridge between GitHub Actions and GitHub Releases.
+The APK itself is preserved exactly as extracted from the upstream artifact.
+The mirror does not:
+- patch APKs
+- rebuild APKs
+- modify resources
+- modify the Android manifest
+- change package names
+- alter native libraries
+- zipalign the APK again
+- re-sign APKs
+When GitHub provides an artifact digest, the synchronization workflow verifies it before extracting the APK.
+The process is effectively:
+Upstream GitHub Actions
+        ↓
+Artifact ZIP
+        ↓
+SHA-256 verification
+        ↓
+APK extraction
+        ↓
+APK copied unchanged
+        ↓
+SHA-256 generated
+        ↓
+GitHub Release
+Traceability
+The rolling Release records information about the upstream build used to generate each synchronization.
+This may include:
+Artifact name
+Artifact ID
+Workflow run ID
+Upstream commit
+Artifact creation time
+This makes it possible to trace a mirrored APK back to the original GitHub Actions build.
+For maximum verification, compare the information shown in the Release notes with the corresponding upstream Actions run.
+Why this repository exists
+GitHub Actions artifacts are useful for development builds, but they have several disadvantages for normal users:
+- they can expire
+- they are distributed as ZIP archives
+- APKs must usually be extracted manually
+- their download URLs are inconvenient for automatic update tools
+- they are not directly exposed as standard GitHub Releases
+This repository provides a bridge:
+Upstream development build
+        ↓
+GitHub Actions artifact
+        ↓
+Verified automated mirror
+        ↓
+Stable GitHub Release APK
+        ↓
+Obtainium / direct download
+Issues
+Please use this repository's Issues only for problems related to the mirror itself.
+Examples:
+- synchronization failed
+- an upstream artifact was not detected
+- an APK was not extracted correctly
+- an expected Release asset is missing
+- Obtainium URL points to the wrong mirrored asset
+- workflow logic problem
+For actual Winlator Mali application bugs, compatibility problems, graphics issues, Wine issues, crashes, or emulator behavior, please report them to the upstream project:
+GunaCharanTeja/WinlatorMali
+Upstream
+All Winlator Mali application development, source code, APK generation, signing, and application-specific work belong to the upstream project:
+GunaCharanTeja/WinlatorMali
+This repository only mirrors publicly available build artifacts.
+Disclaimer
+This repository is not affiliated with or endorsed by the upstream developer.
+It exists solely to make publicly available Winlator Mali GitHub Actions builds easier to:
+- download
+- preserve
+- verify
+- distribute
+- track
+- update automatically
+All trademarks, application code, binaries, and upstream project rights remain with their respective owners.# Winlator Mali Nightly
+
+[![Sync Winlator Mali builds](https://github.com/cairox09/WinlatorMali-Nightly/actions/workflows/sync.yml/badge.svg)](https://github.com/cairox09/WinlatorMali-Nightly/actions/workflows/sync.yml)
+[![Nightly Release](https://img.shields.io/badge/release-nightly-blue)](https://github.com/cairox09/WinlatorMali-Nightly/releases/tag/nightly)
+[![Upstream](https://img.shields.io/badge/upstream-WinlatorMali-blue)](https://github.com/GunaCharanTeja/WinlatorMali)
+
+Automated unofficial mirror of APKs generated by the GitHub Actions workflow from **[GunaCharanTeja/WinlatorMali](https://github.com/GunaCharanTeja/WinlatorMali)**.
+
+The upstream project currently distributes development builds through **GitHub Actions artifacts** instead of regular GitHub Releases.
+
+This repository automatically discovers the newest available Winlator Mali build artifacts, verifies them, extracts the APKs, and republishes them in a permanent rolling GitHub Release with stable URLs.
+
+This makes the builds easier to download, archive, share, and track with applications such as **Obtainium**.
+
+> [!IMPORTANT]
+> This is an **unofficial mirror**.
+>
+> The APKs are generated and signed by the upstream project.
+>
+> This repository does **not** modify, patch, rebuild, decompile, or re-sign the APKs.
+
+> [!NOTE]
+> This repository does not produce its own Winlator Mali builds.
+>
+> It only mirrors publicly available APK artifacts generated by the upstream project's GitHub Actions workflow.
+
+---
+
+## Download
+
+The latest mirrored builds are always available from the rolling `nightly` Release:
+
+### [Download Winlator Mali Nightly Builds](https://github.com/cairox09/WinlatorMali-Nightly/releases/tag/nightly)
+
+Depending on which builds the upstream developer has generated, the Release may contain APKs such as:
+
+```text
+Winlator-Mali-Standard-Release.apk
+Winlator-Mali-Antutu-Release.apk
+Winlator-Mali-Ludashi-Release.apk
+
+Winlator-Mali-Standard-Debug.apk
+Winlator-Mali-Antutu-Debug.apk
+Winlator-Mali-Ludashi-Debug.apk
