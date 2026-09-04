@@ -1,0 +1,324 @@
+name: Sync Winlator Mali Antutu
+
+on:
+  workflow_dispatch:
+
+  schedule:
+    # Verifica a cada hora.
+    # Minuto 37 evita o horário mais congestionado do GitHub Actions.
+    - cron: "37 * * * *"
+
+permissions:
+  contents: write
+
+concurrency:
+  group: sync-winlator-mali-antutu
+  cancel-in-progress: true
+
+env:
+  UPSTREAM_REPO: GunaCharanTeja/WinlatorMali
+  UPSTREAM_BRANCH: bionic-mali-1.0
+  UPSTREAM_WORKFLOW: .github/workflows/build-apk.yml
+  ARTIFACT_NAME: winlator-mali-antutu-release
+
+  RELEASE_TAG: nightly
+  APK_NAME: Winlator-Mali-Antutu.apk
+  SHA_NAME: Winlator-Mali-Antutu.apk.sha256
+
+jobs:
+  sync:
+    name: Mirror latest Antutu build
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Find latest upstream artifact
+        id: upstream
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          echo "Looking for latest '${ARTIFACT_NAME}' artifact..."
+
+          API_URL="https://api.github.com/repos/${UPSTREAM_REPO}/actions/artifacts?name=${ARTIFACT_NAME}&per_page=100"
+
+          RESPONSE="$(
+            curl \
+              --fail \
+              --silent \
+              --show-error \
+              --location \
+              --retry 3 \
+              -H "Accept: application/vnd.github+json" \
+              -H "X-GitHub-Api-Version: 2026-03-10" \
+              "${API_URL}"
+          )"
+
+          ARTIFACT="$(
+            jq -c \
+              --arg branch "${UPSTREAM_BRANCH}" '
+                [
+                  .artifacts[]
+                  | select(.expired == false)
+                  | select(.workflow_run.head_branch == $branch)
+                ]
+                | sort_by(.created_at)
+                | last
+              ' <<< "${RESPONSE}"
+          )"
+
+          if [[ -z "${ARTIFACT}" || "${ARTIFACT}" == "null" ]]; then
+            echo "::error::No non-expired matching artifact was found."
+            exit 1
+          fi
+
+          ARTIFACT_ID="$(jq -r '.id' <<< "${ARTIFACT}")"
+          RUN_ID="$(jq -r '.workflow_run.id' <<< "${ARTIFACT}")"
+          HEAD_SHA="$(jq -r '.workflow_run.head_sha' <<< "${ARTIFACT}")"
+          CREATED_AT="$(jq -r '.created_at' <<< "${ARTIFACT}")"
+          DIGEST="$(jq -r '.digest // empty' <<< "${ARTIFACT}")"
+
+          echo "Artifact ID : ${ARTIFACT_ID}"
+          echo "Run ID      : ${RUN_ID}"
+          echo "Commit      : ${HEAD_SHA}"
+          echo "Created     : ${CREATED_AT}"
+          echo "Digest      : ${DIGEST}"
+
+          echo "artifact_id=${ARTIFACT_ID}" >> "${GITHUB_OUTPUT}"
+          echo "run_id=${RUN_ID}" >> "${GITHUB_OUTPUT}"
+          echo "head_sha=${HEAD_SHA}" >> "${GITHUB_OUTPUT}"
+          echo "created_at=${CREATED_AT}" >> "${GITHUB_OUTPUT}"
+          echo "digest=${DIGEST}" >> "${GITHUB_OUTPUT}"
+
+      - name: Verify upstream workflow run
+        shell: bash
+        env:
+          RUN_ID: ${{ steps.upstream.outputs.run_id }}
+        run: |
+          set -euo pipefail
+
+          RESPONSE="$(
+            curl \
+              --fail \
+              --silent \
+              --show-error \
+              --location \
+              --retry 3 \
+              -H "Accept: application/vnd.github+json" \
+              -H "X-GitHub-Api-Version: 2026-03-10" \
+              "https://api.github.com/repos/${UPSTREAM_REPO}/actions/runs/${RUN_ID}"
+          )"
+
+          CONCLUSION="$(jq -r '.conclusion' <<< "${RESPONSE}")"
+          WORKFLOW_PATH="$(jq -r '.path' <<< "${RESPONSE}")"
+          BRANCH="$(jq -r '.head_branch' <<< "${RESPONSE}")"
+
+          echo "Conclusion    : ${CONCLUSION}"
+          echo "Workflow path : ${WORKFLOW_PATH}"
+          echo "Branch        : ${BRANCH}"
+
+          if [[ "${CONCLUSION}" != "success" ]]; then
+            echo "::error::Latest artifact did not come from a successful run."
+            exit 1
+          fi
+
+          if [[ "${WORKFLOW_PATH}" != "${UPSTREAM_WORKFLOW}" ]]; then
+            echo "::error::Unexpected workflow: ${WORKFLOW_PATH}"
+            exit 1
+          fi
+
+          if [[ "${BRANCH}" != "${UPSTREAM_BRANCH}" ]]; then
+            echo "::error::Unexpected branch: ${BRANCH}"
+            exit 1
+          fi
+
+      - name: Check whether artifact is already mirrored
+        id: check
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          ARTIFACT_ID: ${{ steps.upstream.outputs.artifact_id }}
+        run: |
+          set -euo pipefail
+
+          RELEASE_JSON="$(
+            gh release view "${RELEASE_TAG}" \
+              --json body,assets \
+              2>/dev/null || true
+          )"
+
+          if [[ -z "${RELEASE_JSON}" ]]; then
+            echo "Release does not exist yet."
+            echo "needs_update=true" >> "${GITHUB_OUTPUT}"
+            exit 0
+          fi
+
+          if jq -e \
+            --arg marker "<!-- upstream-artifact:${ARTIFACT_ID} -->" \
+            --arg apk "${APK_NAME}" '
+              (.body | contains($marker))
+              and
+              ([.assets[].name] | index($apk) != null)
+            ' <<< "${RELEASE_JSON}" >/dev/null; then
+
+            echo "Artifact ${ARTIFACT_ID} is already mirrored."
+            echo "needs_update=false" >> "${GITHUB_OUTPUT}"
+          else
+            echo "New upstream artifact detected."
+            echo "needs_update=true" >> "${GITHUB_OUTPUT}"
+          fi
+
+      - name: Download upstream artifact
+        if: steps.check.outputs.needs_update == 'true'
+        shell: bash
+        env:
+          ARTIFACT_ID: ${{ steps.upstream.outputs.artifact_id }}
+        run: |
+          set -euo pipefail
+
+          URL="https://nightly.link/${UPSTREAM_REPO}/actions/artifacts/${ARTIFACT_ID}.zip"
+
+          echo "Downloading artifact ${ARTIFACT_ID}..."
+
+          curl \
+            --fail \
+            --location \
+            --silent \
+            --show-error \
+            --retry 5 \
+            --retry-all-errors \
+            --output artifact.zip \
+            "${URL}"
+
+          test -s artifact.zip
+
+      - name: Verify GitHub artifact digest
+        if: steps.check.outputs.needs_update == 'true'
+        shell: bash
+        env:
+          EXPECTED_DIGEST: ${{ steps.upstream.outputs.digest }}
+        run: |
+          set -euo pipefail
+
+          if [[ -z "${EXPECTED_DIGEST}" ]]; then
+            echo "::warning::Upstream did not provide an artifact digest."
+            exit 0
+          fi
+
+          ACTUAL_DIGEST="sha256:$(sha256sum artifact.zip | awk '{print $1}')"
+
+          echo "Expected: ${EXPECTED_DIGEST}"
+          echo "Actual:   ${ACTUAL_DIGEST}"
+
+          if [[ "${ACTUAL_DIGEST}" != "${EXPECTED_DIGEST}" ]]; then
+            echo "::error::Artifact SHA-256 verification FAILED."
+            exit 1
+          fi
+
+          echo "Artifact integrity verified."
+
+      - name: Extract APK
+        if: steps.check.outputs.needs_update == 'true'
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          mapfile -t APK_FILES < <(
+            unzip -Z1 artifact.zip |
+            grep -Ei '\.apk$'
+          )
+
+          echo "APK files found: ${#APK_FILES[@]}"
+
+          if [[ "${#APK_FILES[@]}" -ne 1 ]]; then
+            printf '%s\n' "${APK_FILES[@]}"
+            echo "::error::Expected exactly one APK inside the artifact."
+            exit 1
+          fi
+
+          APK_PATH="${APK_FILES[0]}"
+
+          echo "Extracting: ${APK_PATH}"
+
+          unzip -p artifact.zip "${APK_PATH}" > "${APK_NAME}"
+
+          if [[ ! -s "${APK_NAME}" ]]; then
+            echo "::error::Extracted APK is empty."
+            exit 1
+          fi
+
+          sha256sum "${APK_NAME}" > "${SHA_NAME}"
+
+          echo
+          echo "APK:"
+          ls -lh "${APK_NAME}"
+
+          echo
+          echo "SHA-256:"
+          cat "${SHA_NAME}"
+
+      - name: Prepare release notes
+        if: steps.check.outputs.needs_update == 'true'
+        shell: bash
+        env:
+          ARTIFACT_ID: ${{ steps.upstream.outputs.artifact_id }}
+          RUN_ID: ${{ steps.upstream.outputs.run_id }}
+          HEAD_SHA: ${{ steps.upstream.outputs.head_sha }}
+          CREATED_AT: ${{ steps.upstream.outputs.created_at }}
+          ARTIFACT_DIGEST: ${{ steps.upstream.outputs.digest }}
+        run: |
+          set -euo pipefail
+
+          APK_SHA="$(sha256sum "${APK_NAME}" | awk '{print $1}')"
+
+          cat > release-notes.md <<EOF
+          Automated mirror of the latest **Winlator Mali Antutu Release** GitHub Actions artifact.
+
+          Upstream repository: https://github.com/${UPSTREAM_REPO}
+          Upstream branch: \`${UPSTREAM_BRANCH}\`
+          Upstream run: https://github.com/${UPSTREAM_REPO}/actions/runs/${RUN_ID}
+          Upstream run ID: \`${RUN_ID}\`
+          Upstream artifact ID: \`${ARTIFACT_ID}\`
+          Upstream commit: \`${HEAD_SHA}\`
+          Artifact created at: \`${CREATED_AT}\`
+          Artifact digest: \`${ARTIFACT_DIGEST}\`
+          APK SHA-256: \`${APK_SHA}\`
+
+          The APK is extracted from the upstream artifact without modification or re-signing.
+
+          <!-- upstream-artifact:${ARTIFACT_ID} -->
+          EOF
+
+      - name: Publish rolling nightly release
+        if: steps.check.outputs.needs_update == 'true'
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+
+          if gh release view "${RELEASE_TAG}" >/dev/null 2>&1; then
+            echo "Updating existing '${RELEASE_TAG}' release..."
+
+            gh release upload "${RELEASE_TAG}" \
+              "${APK_NAME}" \
+              "${SHA_NAME}" \
+              --clobber
+
+            gh release edit "${RELEASE_TAG}" \
+              --title "Winlator Mali Antutu Nightly" \
+              --notes-file release-notes.md
+          else
+            echo "Creating '${RELEASE_TAG}' release..."
+
+            gh release create "${RELEASE_TAG}" \
+              "${APK_NAME}" \
+              "${SHA_NAME}" \
+              --title "Winlator Mali Antutu Nightly" \
+              --notes-file release-notes.md
+          fi
+
+          echo
+          echo "Mirror updated successfully."
